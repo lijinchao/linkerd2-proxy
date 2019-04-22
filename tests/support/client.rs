@@ -1,5 +1,3 @@
-use support::*;
-
 use std::io;
 use std::sync::Mutex;
 
@@ -10,6 +8,7 @@ use self::tokio::{
 };
 use support::bytes::IntoBuf;
 use support::hyper::body::Payload;
+use support::*;
 
 type Request = http::Request<Bytes>;
 type Response = http::Response<BytesBody>;
