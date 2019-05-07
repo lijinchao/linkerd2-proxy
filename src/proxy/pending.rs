@@ -5,6 +5,9 @@ use futures::{Future, Poll};
 use proxy::Error;
 use svc::{self, ServiceExt};
 
+#[derive(Copy, Clone, Debug)]
+pub struct Layer(());
+
 #[derive(Clone, Debug)]
 pub struct MakePending<M> {
     inner: M,
@@ -19,12 +22,18 @@ pub enum Pending<F, S> {
 
 pub type Svc<M, T> = Pending<svc::Oneshot<M, T>, <M as svc::Service<T>>::Response>;
 
-pub fn layer<M, T, Req>() -> impl svc::Layer<M, Service = MakePending<M>> + Copy
-where
-    MakePending<M>: rt::Make<T>,
-    <MakePending<M> as rt::Make<T>>::Value: svc::Service<Req>,
-{
-    svc::layer::mk(|inner| MakePending { inner })
+pub fn layer() -> Layer {
+    Layer(())
+}
+
+// === impl Layer ===
+
+impl<M> svc::Layer<M> for Layer {
+    type Service = MakePending<M>;
+
+    fn layer(&self, inner: M) -> Self::Service {
+        MakePending { inner }
+    }
 }
 
 // === impl MakePending ===
