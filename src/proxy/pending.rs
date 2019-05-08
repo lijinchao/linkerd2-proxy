@@ -54,6 +54,12 @@ where
 
 // === impl Pending ===
 
+impl<F: Future> Pending<F, F::Item> {
+    pub fn new(f: F) -> Self {
+        Pending::Making(f)
+    }
+}
+
 impl<F, S, Req> svc::Service<Req> for Pending<F, S>
 where
     F: Future<Item = S>,

@@ -1,65 +1,61 @@
 use bytes::Buf;
-use futures::{future, Async, Future, Poll};
-use hyper::body::Payload;
-
+use futures::{Async, Future, Poll};
 use http;
-use proxy::{
-    buffer,
-    http::router,
-    resolve::{EndpointStatus, HasEndpointStatus},
-};
+use hyper::body::Payload;
+use std::marker::PhantomData;
+
+use proxy::Error;
 use svc;
 
-use super::Error;
-
-use std::{fmt, marker::PhantomData};
-
-extern crate linkerd2_router as rt;
+pub enum Fallback<P> {
+    Rejected(http::Request<P>),
+    Inner(Error),
+}
 
 #[derive(Debug, Clone)]
-pub struct Layer<Rec, Bal, A> {
-    recognize: Rec,
-    max_in_flight: usize,
-    balance_layer: Bal,
-    _marker: PhantomData<fn(A)>,
+pub struct Layer<A, B, P> {
+    primary_layer: A,
+    fallback_layer: B,
+    _marker: PhantomData<fn(P)>,
 }
 
 #[derive(Debug)]
-pub struct Stack<R, Bal, A> {
-    fallback: R,
-    balance: Bal,
-    _marker: PhantomData<fn(A)>,
+pub struct MakeSvc<A, B, P> {
+    primary_make: A,
+    fallback_make: B,
+    _marker: PhantomData<fn(P)>,
 }
 
 #[derive(Debug)]
-pub struct MakeSvc<R, Bal, A>
-where
-    R: rt::Make<router::Config>,
-{
-    fallback: Fallback<R>,
-    balance: Bal,
-    _marker: PhantomData<fn(A)>,
+pub struct MakeFuture<A, B, P> {
+    primary: A,
+    fallback: B,
+    _marker: PhantomData<fn(P)>,
+}
+
+pub struct Service<A, B, P> {
+    primary_service: A,
+    fallback_service: B,
+    _marker: PhantomData<fn(P)>,
 }
 
 #[derive(Debug)]
-pub struct MakeFuture<R, F, A>
+pub enum ResponseFuture<A, B, P>
 where
-    F: Future,
-    R: rt::Make<router::Config>,
+    A: Future<Error = Fallback<P>>,
+    B: svc::Service<http::Request<P>>,
+    B::Error: Into<Error>,
+    P: Payload,
 {
-    fallback: Option<Fallback<R>>,
-    making: F,
-    _marker: PhantomData<fn(A)>,
-}
-
-pub struct Service<F, Bal, A>
-where
-    F: rt::Make<router::Config>,
-{
-    fallback: Fallback<F>,
-    balance: Bal,
-    status: EndpointStatus,
-    _marker: PhantomData<fn(A)>,
+    Primary {
+        future: A,
+        fallback: B,
+    },
+    FallbackPending {
+        fallback: B,
+        request: Option<http::Request<P>>,
+    },
+    Fallback(B::Future),
 }
 
 #[derive(Clone, Debug)]
@@ -68,193 +64,195 @@ pub enum Body<A, B> {
     B(B),
 }
 
-struct Fallback<F>
-where
-    F: rt::Make<router::Config>,
-{
-    mk: F,
-    cfg: router::Config,
-    router: Option<F::Value>,
-}
-
-pub fn layer<Rec, A, B, D>(
-    balance_layer: super::Layer<A, B, D>,
-    max_in_flight: usize,
-    recognize: Rec,
-) -> Layer<Rec, super::Layer<A, B, D>, A>
-where
-    Rec: router::Recognize<http::Request<A>> + Clone,
-{
+pub fn layer<A, B, P>(primary_layer: A, fallback_layer: B) -> Layer<A, B, P> {
     Layer {
-        recognize,
-        max_in_flight,
-        balance_layer,
+        primary_layer,
+        fallback_layer,
         _marker: PhantomData,
     }
 }
 
-impl<Rec, Bal, A, M> svc::Layer<M> for Layer<Rec, Bal, A>
+// === impl Layer ===
+
+impl<A, B, P, M> svc::Layer<M> for Layer<A, B, P>
 where
-    Rec: router::Recognize<http::Request<A>> + Clone + Send + Sync + 'static,
-    router::Layer<http::Request<A>, Rec>:
-        svc::Layer<<buffer::Layer<http::Request<A>> as svc::stack::Layer<M>>::Service>,
-    buffer::Layer<http::Request<A>>: svc::Layer<M>,
-    Bal: svc::Layer<M>,
     M: Clone,
+    A: svc::Layer<M>,
+    B: svc::Layer<M>,
 {
-    type Service = Stack<
-        <router::Layer<http::Request<A>, Rec> as svc::Layer<
-            <buffer::Layer<http::Request<A>> as svc::stack::Layer<M>>::Service,
-        >>::Service,
-        Bal::Service,
-        A,
-    >;
+    type Service = MakeSvc<A::Service, B::Service, P>;
 
     fn layer(&self, inner: M) -> Self::Service {
-        let balance = self.balance_layer.layer(inner.clone());
-        let inner = buffer::layer(self.max_in_flight).layer(inner);
-        let fallback = router::layer(self.recognize.clone()).layer(inner);
-        Stack {
-            fallback,
-            balance,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<R, Bal, A> rt::Make<router::Config> for Stack<R, Bal, A>
-where
-    R: rt::Make<router::Config> + Clone,
-    Bal: Clone,
-{
-    type Value = MakeSvc<R, Bal, A>;
-    fn make(&self, config: &router::Config) -> Self::Value {
         MakeSvc {
-            fallback: Fallback {
-                mk: self.fallback.clone(),
-                cfg: config.clone(),
-                router: None,
-            },
-            balance: self.balance.clone(),
+            primary_make: self.primary_layer.layer(inner.clone()),
+            fallback_make: self.fallback_layer.layer(inner),
             _marker: PhantomData,
         }
     }
 }
 
-impl<R, Bal, A> Clone for Stack<R, Bal, A>
-where
-    R: rt::Make<router::Config> + Clone,
-    Bal: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            fallback: self.fallback.clone(),
-            balance: self.balance.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
+// === impl MakeSvc ===
 
-impl<R, Bal, A, T> svc::Service<T> for MakeSvc<R, Bal, A>
+impl<A, B, P, T> svc::Service<T> for MakeSvc<A, B, P>
 where
-    Bal: svc::Service<T>,
-    Bal::Response: svc::Service<http::Request<A>> + HasEndpointStatus,
-    <<Bal as svc::Service<T>>::Response as svc::Service<http::Request<A>>>::Error: Into<Error>,
-    Bal::Error: Into<Error>,
-    R: rt::Make<router::Config> + Clone,
+    A: svc::Service<T>,
+    A::Response: svc::Service<http::Request<P>>,
+    A::Error: Into<Error>,
+    B: svc::Service<T>,
+    B::Response: svc::Service<http::Request<P>>,
+    B::Error: Into<Error>,
+    T: Clone,
 {
-    type Response = Service<R, Bal::Response, A>;
-    type Future = MakeFuture<R, Bal::Future, A>;
-    type Error = Bal::Error;
+    type Response = Service<A::Response, B::Response, P>;
+    type Future = MakeFuture<A::Future, B::Future, P>;
+    type Error = Error;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.balance.poll_ready()
+        let p = self.primary_make.poll_ready().map_err(Into::into)?;
+        let f = self.fallback_make.poll_ready().map_err(Into::into)?;
+        if p.is_ready() && f.is_ready() {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 
     fn call(&mut self, target: T) -> Self::Future {
+        let primary = self.primary_make.call(target.clone());
+        let fallback = self.fallback_make.call(target);
+
         MakeFuture {
-            fallback: Some(self.fallback.clone()),
-            making: self.balance.call(target),
+            primary,
+            fallback,
             _marker: PhantomData,
         }
     }
 }
 
-impl<R, Bal, A> Clone for MakeSvc<R, Bal, A>
+impl<A, B, P> Clone for MakeSvc<A, B, P>
 where
-    R: rt::Make<router::Config> + Clone,
-    Bal: Clone,
+    A: Clone,
+    B: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            fallback: self.fallback.clone(),
-            balance: self.balance.clone(),
+            primary_make: self.primary_make.clone(),
+            fallback_make: self.fallback_make.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<R, F, A> Future for MakeFuture<R, F, A>
+// === impl MakeSvc ===
+
+impl<A, B, P> Future for MakeFuture<A, B, P>
 where
-    F: Future,
-    F::Item: HasEndpointStatus,
-    R: rt::Make<router::Config>,
+    A: Future,
+    A::Item: svc::Service<http::Request<P>>,
+    B: Future,
+    B::Item: svc::Service<http::Request<P>>,
 {
-    type Error = F::Error;
-    type Item = Service<R, F::Item, A>;
+    type Item = Service<A::Item, B::Item, P>;
+    type Error = Error;
+
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let balance = try_ready!(self.making.poll());
-        let status = balance.endpoint_status();
-        let fallback = self.fallback.take().expect("polled after ready");
-        Ok(Async::Ready(Service {
-            fallback,
-            status,
-            balance,
+        let primary_service = try_ready!(self.primary.poll().map_err(Into::into));
+        let fallback_service = try_ready!(self.fallback.poll().map_err(Into::into));
+
+        let svc = Service {
+            primary_service,
+            fallback_service,
             _marker: PhantomData,
-        }))
+        };
+        Ok(svc.into())
     }
 }
 
-impl<R, Bal, A, B, C> svc::Service<http::Request<A>> for Service<R, Bal, A>
+// === impl Service ===
+
+impl<A, B, P, Q, R> svc::Service<http::Request<P>> for Service<A, B, P>
 where
-    R: rt::Make<router::Config>,
-    R::Value: svc::Service<http::Request<A>, Response = http::Response<C>, Error = Bal::Error>,
-    Bal: svc::Service<http::Request<A>, Response = http::Response<B>>,
-    Bal::Error: Into<Error>,
-    B: Payload,
-    C: Payload<Error = B::Error>,
+    P: Payload,
+    P::Error: Into<Error>,
+    A: svc::Service<http::Request<P>, Response = http::Response<Q>, Error = Fallback<P>>,
+    Q: Payload,
+    Q::Error: Into<Error>,
+    B: svc::Service<http::Request<P>, Response = http::Response<R>> + Clone,
+    B::Error: Into<Error>,
+    R: Payload,
+    R::Error: Into<Error>,
 {
-    type Response = http::Response<Body<B, C>>;
-    type Error = Bal::Error;
-    type Future = future::Either<
-        future::Map<
-            <R::Value as svc::Service<http::Request<A>>>::Future,
-            fn(<R::Value as svc::Service<http::Request<A>>>::Response) -> Self::Response,
-        >,
-        future::Map<Bal::Future, fn(Bal::Response) -> Self::Response>,
-    >;
+    type Response = http::Response<Body<Q, R>>;
+    type Error = Error;
+    type Future = ResponseFuture<A::Future, B, P>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        let ready = self.balance.poll_ready()?;
-        if !self.status.is_empty() {
-            trace!("endpoints exist; destroying fallback router");
-            // destroy the fallback router
-            self.fallback.destroy();
-        } else {
-            return self.fallback.poll_ready();
+        use svc::Service;
+
+        match self.primary_service.poll_ready() {
+            Ok(ready) => Ok(ready),
+            Err(Fallback::Inner(e)) => Err(e),
+            Err(Fallback::Rejected(_)) => unreachable!("poll_ready must not reject a request"),
         }
-        Ok(ready)
     }
 
-    fn call(&mut self, req: http::Request<A>) -> Self::Future {
-        if self.status.is_empty() {
-            trace!("no endpoints; using fallback...");
-            future::Either::A(self.fallback.call(req).map(Body::rsp_b as fn(_) -> _))
-        } else {
-            future::Either::B(self.balance.call(req).map(Body::rsp_a as fn(_) -> _))
+    fn call(&mut self, req: http::Request<P>) -> Self::Future {
+        use svc::Service;
+
+        let future = self.primary_service.call(req);
+        let fallback = self.fallback_service.clone();
+        ResponseFuture::Primary { future, fallback }
+    }
+}
+
+// === impl ResponseFuture ===
+
+impl<A, B, P, Q, R> Future for ResponseFuture<A, B, P>
+where
+    A: Future<Item = http::Response<Q>, Error = Fallback<P>>,
+    B: svc::Service<http::Request<P>, Response = http::Response<R>> + Clone,
+    B::Error: Into<Error>,
+    P: Payload,
+    Q: Payload,
+    R: Payload,
+{
+    type Item = http::Response<Body<Q, R>>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            *self = match self {
+                ResponseFuture::Primary {
+                    ref mut future,
+                    ref fallback,
+                } => match future.poll() {
+                    Ok(Async::Ready(rsp)) => return Ok(rsp.map(Body::A).into()),
+                    Err(Fallback::Inner(e)) => return Err(e),
+                    Err(Fallback::Rejected(req)) => ResponseFuture::FallbackPending {
+                        fallback: fallback.clone(),
+                        request: Some(req),
+                    },
+                },
+
+                ResponseFuture::FallbackPending {
+                    ref mut fallback,
+                    ref mut request,
+                } => {
+                    try_ready!(fallback.poll_ready().map_err(Into::into));
+                    let req = request.take().expect("poll after ready");
+                    ResponseFuture::Fallback(fallback.call(req))
+                }
+
+                ResponseFuture::Fallback(ref mut f) => {
+                    let rsp = try_ready!(f.poll().map_err(Into::into));
+                    return Ok(rsp.map(Body::B).into());
+                }
+            }
         }
     }
 }
+
+// === impl Body ===
 
 impl<A, B> Payload for Body<A, B>
 where
@@ -330,80 +328,5 @@ where
             Body::A(ref mut buf) => buf.advance(cnt),
             Body::B(ref mut buf) => buf.advance(cnt),
         }
-    }
-}
-
-impl<F> Fallback<F>
-where
-    F: rt::Make<router::Config>,
-{
-    fn destroy(&mut self) {
-        self.router = None;
-    }
-
-    fn create(&mut self) {
-        if self.router.is_none() {
-            trace!("creating fallback router...");
-            self.router = Some(self.mk.make(&self.cfg));
-        }
-    }
-}
-
-impl<F, A> svc::Service<http::Request<A>> for Fallback<F>
-where
-    F: rt::Make<router::Config>,
-    F::Value: svc::Service<http::Request<A>>,
-{
-    type Future = <F::Value as svc::Service<http::Request<A>>>::Future;
-    type Error = <F::Value as svc::Service<http::Request<A>>>::Error;
-    type Response = <F::Value as svc::Service<http::Request<A>>>::Response;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        loop {
-            if let Some(ref mut router) = self.router {
-                return svc::Service::poll_ready(router);
-            } else {
-                self.create();
-            }
-        }
-    }
-
-    fn call(&mut self, req: http::Request<A>) -> Self::Future {
-        loop {
-            if let Some(ref mut router) = self.router {
-                return svc::Service::call(router, req);
-            } else {
-                self.create();
-            }
-        }
-    }
-}
-
-impl<F> Clone for Fallback<F>
-where
-    F: rt::Make<router::Config> + Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            mk: self.mk.clone(),
-            cfg: self.cfg.clone(),
-            router: None,
-        }
-    }
-}
-
-impl<F> fmt::Debug for Fallback<F>
-where
-    F: rt::Make<router::Config> + fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut dbg = f.debug_struct("Fallback");
-        dbg.field("mk", &self.mk).field("cfg", &self.cfg);
-        if self.router.is_some() {
-            dbg.field("router", &format_args!("Some(...)"));
-        } else {
-            dbg.field("router", &format_args!("None"));
-        }
-        dbg.finish()
     }
 }

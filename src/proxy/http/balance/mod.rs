@@ -14,10 +14,7 @@ pub use self::tower_balance::{
 };
 
 use http;
-use proxy::{
-    http::router,
-    resolve::{EndpointStatus, HasEndpointStatus},
-};
+use proxy::resolve::{EndpointStatus, HasEndpointStatus};
 use svc;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -95,16 +92,13 @@ where
 }
 
 impl<A, B, D> Layer<A, B, D> {
-    pub fn with_fallback<Rec>(
-        self,
-        max_in_flight: usize,
-        recognize: Rec,
-    ) -> fallback::Layer<Rec, Self, A>
+    pub fn with_fallback<L, M>(self, fallback: L) -> fallback::Layer<Self, L, A>
     where
-        Rec: router::Recognize<http::Request<A>> + Clone + Send + Sync + 'static,
+        Self: svc::Layer<M>,
+        L: svc::Layer<M>,
         http::Request<A>: Send + 'static,
     {
-        fallback::layer(self, max_in_flight, recognize)
+        fallback::layer(self, fallback)
     }
 }
 
