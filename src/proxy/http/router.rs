@@ -32,6 +32,12 @@ pub struct Layer<Req, Rec: Recognize<Req>> {
 }
 
 #[derive(Clone, Debug)]
+pub struct Configured<T> {
+    inner: T,
+    config: Config,
+}
+
+#[derive(Clone, Debug)]
 pub struct Stack<Req, Rec: Recognize<Req>, Mk> {
     recognize: Rec,
     inner: Mk,
@@ -94,6 +100,56 @@ where
             recognize: self.recognize.clone(),
             _p: PhantomData,
         }
+    }
+}
+
+impl<Req, Rec: Recognize<Req>> Layer<Req, Rec> {
+    pub fn configured(self, config: Config) -> Configured<Self> {
+        Configured {
+            inner: self,
+            config,
+        }
+    }
+}
+
+// === impl Configured ===
+
+impl<Req, Rec, Mk, B> svc::Layer<Mk> for Configured<Layer<Req, Rec>>
+where
+    Rec: Recognize<Req> + Clone + Send + Sync + 'static,
+    Mk: rt::Make<Rec::Target> + Clone + Send + Sync + 'static,
+    Mk::Value: svc::Service<Req, Response = http::Response<B>> + Clone,
+    <Mk::Value as svc::Service<Req>>::Error: Into<Error>,
+    B: Default + Send + 'static,
+{
+    type Service = Configured<Stack<Req, Rec, Mk>>;
+
+    fn layer(&self, inner: Mk) -> Self::Service {
+        Configured {
+            inner: self.inner.layer(inner),
+            config: self.config.clone(),
+        }
+    }
+}
+
+impl<Req, Rec, Mk, B, T> svc::Service<T> for Configured<Stack<Req, Rec, Mk>>
+where
+    Rec: Recognize<Req> + Clone + Send + Sync + 'static,
+    Mk: rt::Make<Rec::Target> + Clone + Send + Sync + 'static,
+    Mk::Value: svc::Service<Req, Response = http::Response<B>> + Clone,
+    <Mk::Value as svc::Service<Req>>::Error: Into<Error>,
+    B: Default + Send + 'static,
+{
+    type Response = Service<Req, Rec, Mk>;
+    type Error = Never;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(().into()) // always ready to make a Router
+    }
+
+    fn call(&mut self, _: T) -> Self::Future {
+        futures::future::ok(self.inner.make(&self.config))
     }
 }
 
