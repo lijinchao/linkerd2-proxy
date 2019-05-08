@@ -25,18 +25,20 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 /// Configures a stack to resolve `T` typed targets to balance requests over
 /// `M`-typed endpoint stacks.
 #[derive(Debug)]
-pub struct Layer<D> {
+pub struct Layer<A, B, D> {
     decay: Duration,
     default_rtt: Duration,
     discover: D,
+    _marker: PhantomData<fn(A) -> B>,
 }
 
 /// Resolves `T` typed targets to balance requests over `M`-typed endpoint stacks.
 #[derive(Debug)]
-pub struct MakeSvc<M> {
+pub struct MakeSvc<M, A, B> {
     decay: Duration,
     default_rtt: Duration,
     inner: M,
+    _marker: PhantomData<fn(A) -> B>,
 }
 
 #[derive(Debug)]
@@ -52,25 +54,27 @@ pub struct NoEndpoints {
 
 // === impl Layer ===
 
-pub fn layer<D, E>(default_rtt: Duration, decay: Duration, discover: D) -> Layer<D> {
+pub fn layer<A, B, D>(default_rtt: Duration, decay: Duration, discover: D) -> Layer<A, B, D> {
     Layer {
         decay,
         default_rtt,
         discover,
+        _marker: PhantomData,
     }
 }
 
-impl<D: Clone> Clone for Layer<D> {
+impl<A, B, D: Clone> Clone for Layer<A, B, D> {
     fn clone(&self) -> Self {
         Layer {
             decay: self.decay,
             default_rtt: self.default_rtt,
             discover: self.discover.clone(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<M, D> svc::Layer<M> for Layer<D>
+impl<M, A, B, D> svc::Layer<M> for Layer<A, B, D>
 where
     A: Payload,
     B: Payload,
@@ -83,15 +87,20 @@ where
             decay: self.decay,
             default_rtt: self.default_rtt,
             inner: self.discover.layer(inner),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<D> Layer<D> {
-    pub fn with_fallback<L>(
+impl<A, B, D> Layer<A, B, D> {
+    pub fn with_fallback<Rec>(
         self,
-        inner: L,
+        max_in_flight: usize,
+        recognize: Rec,
     ) -> fallback::Layer<Rec, Self, A>
+    where
+        Rec: router::Recognize<http::Request<A>> + Clone + Send + Sync + 'static,
+        http::Request<A>: Send + 'static,
     {
         fallback::layer(self, max_in_flight, recognize)
     }
@@ -219,21 +228,21 @@ pub mod fallback {
     extern crate linkerd2_router as rt;
 
     #[derive(Debug, Clone)]
-    pub struct Layer<B, F> {
-        balance: B,
-        fallback: F
+    pub struct Layer<F, Bal, A> {
+        balance: Bal,
+        fallback: F,
+        _marker: PhantomData<fn(A)>,
     }
 
     #[derive(Debug)]
-    pub struct Stack<B, F> {
-        balance: B,
+    pub struct Stack<R, Bal, A> {
         fallback: R,
+        balance: Bal,
+        _marker: PhantomData<fn(A)>,
     }
 
     #[derive(Debug)]
     pub struct MakeSvc<R, Bal, A>
-    where
-        R: rt::Make<router::Config>,
     {
         fallback: Fallback<R>,
         balance: Bal,
@@ -269,18 +278,17 @@ pub mod fallback {
 
     struct Fallback<F>
     where
-        F: rt::Make<router::Config>,
+        F: rt::Make<()>,
     {
         mk: F,
-        cfg: router::Config,
         router: Option<F::Value>,
     }
 
-    pub fn layer<Rec, D>(
-        balance_layer: super::Layer<D>,
+    pub fn layer<Rec, A, B, D>(
+        balance_layer: super::Layer<A, B, D>,
         max_in_flight: usize,
         recognize: Rec,
-    ) -> Layer<Rec, super::Layer<D>, A>
+    ) -> Layer<Rec, super::Layer<A, B, D>, A>
     where
         Rec: router::Recognize<http::Request<A>> + Clone,
     {
@@ -310,9 +318,8 @@ pub mod fallback {
         >;
 
         fn layer(&self, inner: M) -> Self::Service {
-            let balance = self.balance_layer.layer(inner.clone());
-            let inner = buffer::layer(self.max_in_flight).layer(inner);
-            let fallback = router::layer(self.recognize.clone()).layer(inner);
+            let balance = self.balance.layer(inner.clone());
+            let fallback = self.fallback.layer(inner);
             Stack {
                 fallback,
                 balance,
@@ -414,7 +421,7 @@ pub mod fallback {
         }
     }
 
-    impl<R, Bal, C> svc::Service<http::Request<A>> for Service<R, Bal, A>
+    impl<R, Bal, A, B, C> svc::Service<http::Request<A>> for Service<R, Bal, A>
     where
         R: rt::Make<router::Config>,
         R::Value: svc::Service<http::Request<A>, Response = http::Response<C>, Error = Bal::Error>,
