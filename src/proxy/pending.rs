@@ -2,7 +2,10 @@ extern crate linkerd2_router as rt;
 
 use futures::{Future, Poll};
 
-use proxy::Error;
+use proxy::{
+    http::balance::{HasWeight, Weight},
+    Error,
+};
 use svc::{self, ServiceExt};
 
 #[derive(Copy, Clone, Debug)]
@@ -80,6 +83,15 @@ where
         match self {
             Pending::Making(_) => panic!("pending not ready yet"),
             Pending::Made(s) => s.call(req).map_err(Into::into),
+        }
+    }
+}
+
+impl<F: HasWeight, S: HasWeight> HasWeight for Pending<F, S> {
+    fn weight(&self) -> Weight {
+        match self {
+            Pending::Making(f) => f.weight(),
+            Pending::Made(s) => s.weight(),
         }
     }
 }

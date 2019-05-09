@@ -11,9 +11,8 @@ use hyper::body::Payload;
 use self::tower_discover::Discover;
 
 pub use self::hyper_balance::{PendingUntilFirstData, PendingUntilFirstDataBody};
-pub use self::tower_balance::{
-    choose::PowerOfTwoChoices, load::WithPeakEwma, Balance, HasWeight, Weight, WithWeighted,
-};
+use self::tower_balance::{choose::PowerOfTwoChoices, load::WithPeakEwma, Balance, WithWeighted};
+pub use self::tower_balance::{HasWeight, Weight};
 
 use http;
 use svc;
@@ -91,11 +90,12 @@ where
     M: svc::Service<T>,
     M::Response: Discover,
     <M::Response as Discover>::Service:
-        svc::Service<http::Request<A>, Response = http::Response<B>>,
+        svc::Service<http::Request<A>, Response = http::Response<B>> + HasWeight,
     A: Payload,
     B: Payload,
 {
-    type Response = Balance<WithPeakEwma<M::Response, PendingUntilFirstData>, PowerOfTwoChoices>;
+    type Response =
+        Balance<WithWeighted<WithPeakEwma<M::Response, PendingUntilFirstData>>, PowerOfTwoChoices>;
     type Error = M::Error;
     type Future = MakeSvc<M::Future, A, B>;
 
@@ -119,17 +119,24 @@ impl<F, A, B> Future for MakeSvc<F, A, B>
 where
     F: Future,
     F::Item: Discover,
-    <F::Item as Discover>::Service: svc::Service<http::Request<A>, Response = http::Response<B>>,
+    <F::Item as Discover>::Service:
+        svc::Service<http::Request<A>, Response = http::Response<B>> + HasWeight,
     A: Payload,
     B: Payload,
 {
-    type Item = Balance<WithPeakEwma<F::Item, PendingUntilFirstData>, PowerOfTwoChoices>;
+    type Item =
+        Balance<WithWeighted<WithPeakEwma<F::Item, PendingUntilFirstData>>, PowerOfTwoChoices>;
     type Error = F::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let discover = try_ready!(self.inner.poll());
         let instrument = PendingUntilFirstData::default();
-        let loaded = WithPeakEwma::new(discover, self.default_rtt, self.decay, instrument);
+        let loaded = WithWeighted::from(WithPeakEwma::new(
+            discover,
+            self.default_rtt,
+            self.decay,
+            instrument,
+        ));
         Ok(Balance::p2c(loaded).into())
     }
 }
@@ -185,6 +192,12 @@ pub mod weight {
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
             let svc = try_ready!(self.inner.poll());
             Ok(Weighted::new(svc, self.weight).into())
+        }
+    }
+
+    impl<F> HasWeight for MakeFuture<F> {
+        fn weight(&self) -> Weight {
+            self.weight
         }
     }
 }
