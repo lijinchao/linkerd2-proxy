@@ -417,6 +417,7 @@ where
         let profiles_client =
             ProfilesClient::new(dst_svc, Duration::from_secs(3), config.destination_context);
 
+        #[allow(dead_code)]
         let outbound = {
             use super::outbound::{
                 //add_remote_ip_on_rsp, add_server_id_on_rsp,
@@ -513,15 +514,15 @@ where
             //    per-route policy.
             // 3. Creates a load balancer , configured by resolving the
             //   `DstAddr` with a resolver.
-            let dst_stack = svc::builder()
-                .layer(header_from_target::layer(super::CANONICAL_DST_HEADER))
-                .layer(profiles::router::layer(
-                    profile_suffixes,
-                    profiles_client,
-                    dst_route_layer,
-                ))
-                .buffer_pending(max_in_flight, DispatchDeadline::extract)
-                .service(balancer_stack);
+            // let dst_stack = svc::builder()
+            //     .layer(header_from_target::layer(super::CANONICAL_DST_HEADER))
+            //     .layer(profiles::router::layer(
+            //         profile_suffixes,
+            //         profiles_client,
+            //         dst_route_layer,
+            //     ))
+            //     .buffer_pending(max_in_flight, DispatchDeadline::extract)
+            //     .service(balancer_stack);
 
             // Routes request using the `DstAddr` extension.
             //
@@ -537,7 +538,7 @@ where
                     addr
                 }))
                 .buffer_pending(max_in_flight, DispatchDeadline::extract)
-                .service(dst_stack)
+                .service(balancer_stack)
                 .make(&router::Config::new("out dst", capacity, max_idle_age));
 
             // Canonicalizes the request-specified `Addr` via DNS, and
