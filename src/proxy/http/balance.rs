@@ -12,7 +12,7 @@ use self::tower_discover::Discover;
 
 pub use self::hyper_balance::{PendingUntilFirstData, PendingUntilFirstDataBody};
 use self::tower_balance::{choose::PowerOfTwoChoices, load::WithPeakEwma, Balance, WithWeighted};
-pub use self::tower_balance::{HasWeight, Weight};
+pub use self::tower_balance::{HasWeight, Weight, Weighted};
 
 use http;
 use svc;
@@ -89,8 +89,9 @@ impl<T, M, A, B> svc::Service<T> for MakeSvc<M, A, B>
 where
     M: svc::Service<T>,
     M::Response: Discover,
+    <M::Response as Discover>::Key: HasWeight,
     <M::Response as Discover>::Service:
-        svc::Service<http::Request<A>, Response = http::Response<B>> + HasWeight,
+        svc::Service<http::Request<A>, Response = http::Response<B>>,
     A: Payload,
     B: Payload,
 {
@@ -107,9 +108,9 @@ where
         let inner = self.inner.call(target);
 
         MakeSvc {
+            inner,
             decay: self.decay,
             default_rtt: self.default_rtt,
-            inner,
             _marker: PhantomData,
         }
     }
@@ -119,8 +120,8 @@ impl<F, A, B> Future for MakeSvc<F, A, B>
 where
     F: Future,
     F::Item: Discover,
-    <F::Item as Discover>::Service:
-        svc::Service<http::Request<A>, Response = http::Response<B>> + HasWeight,
+    <F::Item as Discover>::Key: HasWeight,
+    <F::Item as Discover>::Service: svc::Service<http::Request<A>, Response = http::Response<B>>,
     A: Payload,
     B: Payload,
 {
@@ -138,66 +139,5 @@ where
             instrument,
         ));
         Ok(Balance::p2c(loaded).into())
-    }
-}
-
-pub mod weight {
-    use super::tower_balance::{HasWeight, Weight, Weighted};
-    use futures::{Future, Poll};
-    use svc;
-
-    #[derive(Clone, Debug)]
-    pub struct MakeSvc<M> {
-        inner: M,
-    }
-
-    #[derive(Debug)]
-    pub struct MakeFuture<F> {
-        inner: F,
-        weight: Weight,
-    }
-
-    pub fn layer<M>() -> impl svc::Layer<M, Service = MakeSvc<M>> + Copy {
-        svc::layer::mk(|inner| MakeSvc { inner })
-    }
-
-    impl<T, M> svc::Service<T> for MakeSvc<M>
-    where
-        T: HasWeight,
-        M: svc::Service<T>,
-    {
-        type Response = Weighted<M::Response>;
-        type Error = M::Error;
-        type Future = MakeFuture<M::Future>;
-
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            self.inner.poll_ready()
-        }
-
-        fn call(&mut self, target: T) -> Self::Future {
-            MakeFuture {
-                weight: target.weight(),
-                inner: self.inner.call(target),
-            }
-        }
-    }
-
-    impl<F> Future for MakeFuture<F>
-    where
-        F: Future,
-    {
-        type Item = Weighted<F::Item>;
-        type Error = F::Error;
-
-        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-            let svc = try_ready!(self.inner.poll());
-            Ok(Weighted::new(svc, self.weight).into())
-        }
-    }
-
-    impl<F> HasWeight for MakeFuture<F> {
-        fn weight(&self) -> Weight {
-            self.weight
-        }
     }
 }

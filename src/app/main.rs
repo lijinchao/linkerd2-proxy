@@ -417,7 +417,6 @@ where
         let profiles_client =
             ProfilesClient::new(dst_svc, Duration::from_secs(3), config.destination_context);
 
-        #[allow(dead_code)]
         let outbound = {
             use super::outbound::{
                 //add_remote_ip_on_rsp, add_server_id_on_rsp,
@@ -504,7 +503,6 @@ where
                 .layer(balance::layer(EWMA_DEFAULT_RTT, EWMA_DECAY))
                 .layer(resolve::layer(Resolve::new(resolver)))
                 .layer(pending::layer())
-                .layer(balance::weight::layer())
                 .service(endpoint_stack);
 
             // A per-`DstAddr` stack that does the following:
@@ -514,15 +512,16 @@ where
             //    per-route policy.
             // 3. Creates a load balancer , configured by resolving the
             //   `DstAddr` with a resolver.
-            // let dst_stack = svc::builder()
-            //     .layer(header_from_target::layer(super::CANONICAL_DST_HEADER))
-            //     .layer(profiles::router::layer(
-            //         profile_suffixes,
-            //         profiles_client,
-            //         dst_route_layer,
-            //     ))
-            //     .buffer_pending(max_in_flight, DispatchDeadline::extract)
-            //     .service(balancer_stack);
+            #[allow(dead_code)]
+            let dst_stack = svc::builder()
+                .layer(header_from_target::layer(super::CANONICAL_DST_HEADER))
+                .layer(profiles::router::layer(
+                    profile_suffixes,
+                    profiles_client,
+                    dst_route_layer,
+                ))
+                .buffer_pending(max_in_flight, DispatchDeadline::extract);
+            //.service(balancer_stack);
 
             // Routes request using the `DstAddr` extension.
             //

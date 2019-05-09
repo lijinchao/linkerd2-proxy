@@ -6,6 +6,7 @@ use std::fmt;
 use std::net::SocketAddr;
 
 pub use self::tower_discover::Change;
+use proxy::http::balance::{HasWeight, Weighted};
 use proxy::Error;
 use svc;
 
@@ -104,11 +105,11 @@ where
 impl<R, M> tower_discover::Discover for Discover<R, M>
 where
     R: Resolution,
-    R::Endpoint: fmt::Debug,
+    R::Endpoint: fmt::Debug + HasWeight,
     R::Error: Into<Error>,
     M: rt::Make<R::Endpoint>,
 {
-    type Key = SocketAddr;
+    type Key = Weighted<SocketAddr>;
     type Service = M::Value;
     type Error = Error;
 
@@ -121,8 +122,12 @@ where
                 // by replacing the old endpoint with the new one, so
                 // insertions of new endpoints and metadata changes for
                 // existing ones can be handled in the same way.
+                let weight = target.weight();
                 let svc = self.make.make(&target);
-                Ok(Async::Ready(Change::Insert(addr, svc)))
+                Ok(Async::Ready(Change::Insert(
+                    Weighted::new(addr, weight),
+                    svc,
+                )))
             }
             Update::Remove(addr) => Ok(Async::Ready(Change::Remove(addr))),
         }
