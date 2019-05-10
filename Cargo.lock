@@ -413,7 +413,7 @@ dependencies = [
  "futures 0.1.26 (registry+https://github.com/rust-lang/crates.io-index)",
  "http 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.12.28 (registry+https://github.com/rust-lang/crates.io-index)",
- "tower-balance 0.1.0 (git+https://github.com/tower-rs/tower)",
+ "tower-balance 0.1.0 (git+https://github.com/olix0r/tower?branch=ver/no-float)",
  "tower-service 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -561,7 +561,7 @@ dependencies = [
  "tokio-signal 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-timer 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "tower 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "tower-balance 0.1.0 (git+https://github.com/tower-rs/tower)",
+ "tower-balance 0.1.0 (git+https://github.com/olix0r/tower?branch=ver/no-float)",
  "tower-discover 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tower-grpc 0.1.0 (git+https://github.com/tower-rs/tower-grpc)",
  "tower-reconnect 0.1.0 (git+https://github.com/tower-rs/tower)",
@@ -1488,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "tower-balance"
 version = "0.1.0"
-source = "git+https://github.com/tower-rs/tower#9b27863a6160e2146bcf1bc6548a0334e7ad1fb8"
+source = "git+https://github.com/olix0r/tower?branch=ver/no-float#f8b150b43ed24df628abe3e96ab52bfdc7673867"
 dependencies = [
  "futures 0.1.26 (registry+https://github.com/rust-lang/crates.io-index)",
  "indexmap 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2023,7 +2023,7 @@ dependencies = [
 "checksum tokio-udp 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "137bda266504893ac4774e0ec4c2108f7ccdbcb7ac8dced6305fe9e4e0b5041a"
 "checksum tokio-uds 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)" = "037ffc3ba0e12a0ab4aca92e5234e0dedeb48fddf6ccd260f1f150a36a9f2445"
 "checksum tower 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b931b40c84f47fd203101b2ef18cd6523e27bb2902129bc3ca2ed1f07fa17695"
-"checksum tower-balance 0.1.0 (git+https://github.com/tower-rs/tower)" = "<none>"
+"checksum tower-balance 0.1.0 (git+https://github.com/olix0r/tower?branch=ver/no-float)" = "<none>"
 "checksum tower-buffer 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5c98a7784e6c8ba106bc98d44ed1dbb9c018a8e0322e5e894d365f9020967128"
 "checksum tower-discover 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "73a7632286f78164d65d18fd0e570307acde9362489aa5c8c53e6315cc2bde47"
 "checksum tower-grpc 0.1.0 (git+https://github.com/tower-rs/tower-grpc)" = "<none>"

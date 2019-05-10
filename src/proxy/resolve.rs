@@ -6,7 +6,7 @@ use std::fmt;
 use std::net::SocketAddr;
 
 pub use self::tower_discover::Change;
-use proxy::http::balance::{HasWeight, Weighted};
+use proxy::http::balance::{HasWeight, Weight, Weighted};
 use proxy::Error;
 use svc;
 
@@ -129,7 +129,10 @@ where
                     svc,
                 )))
             }
-            Update::Remove(addr) => Ok(Async::Ready(Change::Remove(addr))),
+            Update::Remove(addr) => Ok(Async::Ready(Change::Remove(Weighted::new(
+                addr,
+                Weight::UNIT, // ignored
+            )))),
         }
     }
 }

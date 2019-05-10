@@ -102,3 +102,6 @@ debug = false
 
 [patch.crates-io]
 webpki = { git = "https://github.com/seanmonstar/webpki", branch = "cert-dns-names" }
+
+[patch."https://github.com/tower-rs/tower"]
+tower-balance = { git = "https://github.com/olix0r/tower", branch = "ver/no-float" }

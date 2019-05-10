@@ -512,7 +512,6 @@ where
             //    per-route policy.
             // 3. Creates a load balancer , configured by resolving the
             //   `DstAddr` with a resolver.
-            #[allow(dead_code)]
             let dst_stack = svc::builder()
                 .layer(header_from_target::layer(super::CANONICAL_DST_HEADER))
                 .layer(profiles::router::layer(
@@ -520,8 +519,8 @@ where
                     profiles_client,
                     dst_route_layer,
                 ))
-                .buffer_pending(max_in_flight, DispatchDeadline::extract);
-            //.service(balancer_stack);
+                .buffer_pending(max_in_flight, DispatchDeadline::extract)
+                .service(balancer_stack);
 
             // Routes request using the `DstAddr` extension.
             //
@@ -537,7 +536,7 @@ where
                     addr
                 }))
                 .buffer_pending(max_in_flight, DispatchDeadline::extract)
-                .service(balancer_stack)
+                .service(dst_stack)
                 .make(&router::Config::new("out dst", capacity, max_idle_age));
 
             // Canonicalizes the request-specified `Addr` via DNS, and
